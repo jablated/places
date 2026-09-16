@@ -1,0 +1,18 @@
+# Go
+/api/places
+*.test
+
+# SvelteKit
+/web/build/
+/web/.svelte-kit/
+/web/node_modules/
+
+# Embed staging dir — contents are generated; only the .gitkeep is tracked
+/api/webdist/*
+!/api/webdist/.gitkeep
+
+# SQLite data (local dev)
+/data/
+
+# Docker
+*.env.local
