@@ -87,6 +87,10 @@ type ListOptions struct {
 	Tags    []string
 	City    string
 	Q       string
+
+	// Optional bounding box. The filter applies only when all four are set;
+	// places without coordinates never match it.
+	SWLat, SWLng, NELat, NELng *float64
 }
 
 const (
@@ -412,6 +416,10 @@ func buildFilter(opts ListOptions) (string, []any) {
 		pattern := "%" + likeEscape(q) + "%"
 		where = append(where, `(name LIKE ? ESCAPE '\' OR description LIKE ? ESCAPE '\' OR neighborhood LIKE ? ESCAPE '\')`)
 		args = append(args, pattern, pattern, pattern)
+	}
+	if opts.SWLat != nil && opts.SWLng != nil && opts.NELat != nil && opts.NELng != nil {
+		where = append(where, `lat IS NOT NULL AND lng IS NOT NULL AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?`)
+		args = append(args, *opts.SWLat, *opts.NELat, *opts.SWLng, *opts.NELng)
 	}
 
 	if len(where) == 0 {

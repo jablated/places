@@ -262,6 +262,10 @@ func (s *Server) handleListPlaces(w http.ResponseWriter, r *http.Request) {
 		Tags:    q["tag"],
 		City:    q.Get("city"),
 		Q:       q.Get("q"),
+		SWLat:   parseFloatPtr(q.Get("sw_lat")),
+		SWLng:   parseFloatPtr(q.Get("sw_lng")),
+		NELat:   parseFloatPtr(q.Get("ne_lat")),
+		NELng:   parseFloatPtr(q.Get("ne_lng")),
 	}
 	opts.normalize()
 
@@ -533,4 +537,17 @@ func atoiDefault(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// parseFloatPtr returns nil for an empty or unparseable value, so a malformed
+// bbox param drops the bbox filter rather than failing the request.
+func parseFloatPtr(s string) *float64 {
+	if s == "" {
+		return nil
+	}
+	v, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return nil
+	}
+	return &v
 }

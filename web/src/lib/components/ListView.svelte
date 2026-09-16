@@ -1,11 +1,18 @@
 <script lang="ts">
 	import type { Place } from '$lib/api';
 	import { formatDate, hostOf, preview } from '$lib/format';
+	import { haversineDistanceMi } from '$lib/geo';
 
 	let {
 		places = [],
-		onTagClick
-	}: { places: Place[]; onTagClick?: (tag: string) => void } = $props();
+		onTagClick,
+		distanceFrom
+	}: {
+		places: Place[];
+		onTagClick?: (tag: string) => void;
+		/** When set, each card shows its distance from this point. */
+		distanceFrom?: { lat: number; lng: number };
+	} = $props();
 </script>
 
 <div class="list">
@@ -26,6 +33,11 @@
 					<span class="dot">·</span><span class="date">{formatDate(place.created_at)}</span>
 				{/if}
 			</p>
+
+			{#if distanceFrom && place.lat != null && place.lng != null}
+				{@const dist = haversineDistanceMi(distanceFrom.lat, distanceFrom.lng, place.lat, place.lng)}
+				<p class="card-dist">{dist < 0.1 ? `${Math.round(dist * 5280)} ft` : `${dist.toFixed(1)} mi`}</p>
+			{/if}
 
 			{#if place.tags.length}
 				<p class="card-tags">
@@ -97,6 +109,13 @@
 		margin: 0;
 		color: #71717a;
 		font-size: 0.8rem;
+	}
+
+	.card-dist {
+		margin: 0;
+		color: #059669;
+		font-size: 0.78rem;
+		font-weight: 500;
 	}
 
 	.dot {

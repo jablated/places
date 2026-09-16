@@ -18,16 +18,26 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { Place } from '$lib/api';
+	import type { BBox } from '$lib/geo';
 
 	let {
 		places = [],
 		annotate,
-		fit = false
+		fit = false,
+		userLocation,
+		onViewportChange,
+		recenterTick
 	}: {
 		places: Place[];
 		annotate?: (place: Place) => MapAnnotation | undefined;
 		/** Frame the markers on load instead of using the default NYC viewport. */
 		fit?: boolean;
+		/** Draws a "you are here" pin with a half-mile ring. */
+		userLocation?: { lat: number; lng: number };
+		/** Called with the visible bounds once panning/zooming settles. */
+		onViewportChange?: (bbox: BBox) => void;
+		/** Bump to fly back to userLocation. */
+		recenterTick?: number;
 	} = $props();
 
 	// NYC default viewport, per spec.
@@ -35,6 +45,9 @@
 	const DEFAULT_ZOOM = 12;
 	const FIT_PADDING: [number, number] = [40, 40];
 	const FIT_MAX_ZOOM = 15;
+	const USER_RADIUS_M = 804; // half a mile
+	const USER_ZOOM = 15;
+	const VIEWPORT_DEBOUNCE_MS = 2000;
 
 	// OpenStreetMap raster tiles — free, no API key, no WebGL required.
 	const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -47,6 +60,8 @@
 	let L: any = null;
 	let map: any = null;
 	let markerLayer: any = null;
+	let userCircle: any = null;
+	let userMarker: any = null;
 	let error = $state('');
 
 	function escapeHtml(s: string): string {
@@ -127,6 +142,8 @@
 
 	onMount(() => {
 		let disposed = false;
+		let viewportTimer: ReturnType<typeof setTimeout> | null = null;
+		let onMoveEnd: (() => void) | null = null;
 
 		(async () => {
 			try {
@@ -145,6 +162,42 @@
 
 				L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 19 }).addTo(map);
 
+				if (userLocation) {
+					const at: [number, number] = [userLocation.lat, userLocation.lng];
+					map.setView(at, USER_ZOOM);
+					userCircle = L.circle(at, {
+						radius: USER_RADIUS_M,
+						color: '#4338ca',
+						fillColor: '#4338ca',
+						fillOpacity: 0.08,
+						weight: 2
+					}).addTo(map);
+					userMarker = L.marker(at, {
+						icon: L.divIcon({ className: 'user-location-pin', iconSize: [16, 16], iconAnchor: [8, 8] }),
+						title: 'You are here',
+						keyboard: false,
+						zIndexOffset: 1000
+					}).addTo(map);
+				}
+
+				if (onViewportChange) {
+					// Debounced so a drag-and-zoom gesture produces one fetch, not a burst.
+					onMoveEnd = () => {
+						if (viewportTimer) clearTimeout(viewportTimer);
+						viewportTimer = setTimeout(() => {
+							if (!map) return;
+							const b = map.getBounds();
+							onViewportChange({
+								swLat: b.getSouth(),
+								swLng: b.getWest(),
+								neLat: b.getNorth(),
+								neLng: b.getEast()
+							});
+						}, VIEWPORT_DEBOUNCE_MS);
+					};
+					map.on('moveend zoomend', onMoveEnd);
+				}
+
 				markerLayer = L.layerGroup().addTo(map);
 				renderMarkers(places);
 			} catch (err) {
@@ -154,9 +207,13 @@
 
 		return () => {
 			disposed = true;
+			if (viewportTimer) clearTimeout(viewportTimer);
+			if (onMoveEnd) map?.off('moveend zoomend', onMoveEnd);
 			map?.remove();
 			map = null;
 			markerLayer = null;
+			userCircle = null;
+			userMarker = null;
 		};
 	});
 
@@ -168,6 +225,12 @@
 		// the stop list happens to be reference-equal.
 		void annotate;
 		if (map) renderMarkers(list);
+	});
+
+	$effect(() => {
+		if (recenterTick && recenterTick > 0 && map && userLocation) {
+			map.setView([userLocation.lat, userLocation.lng], USER_ZOOM);
+		}
 	});
 </script>
 
@@ -216,6 +279,16 @@
 		border: 3px solid #fff;
 		box-shadow: 0 1px 4px rgb(0 0 0 / 0.4);
 		cursor: pointer;
+	}
+
+	:global(.user-location-pin) {
+		display: block;
+		width: 16px;
+		height: 16px;
+		border-radius: 50%;
+		background: #4338ca;
+		border: 3px solid #fff;
+		box-shadow: 0 0 0 3px rgba(67, 56, 202, 0.3);
 	}
 
 	:global(.place-pin--visited) {

@@ -5,8 +5,9 @@
 	import ListView from '$lib/components/ListView.svelte';
 	import TripsView from '$lib/components/TripsView.svelte';
 	import TripDetailView from '$lib/components/TripDetailView.svelte';
+	import NearMeView from '$lib/components/NearMeView.svelte';
 
-	type View = 'map' | 'list' | 'trips';
+	type View = 'map' | 'list' | 'trips' | 'nearme';
 
 	// Map view needs every matching marker at once, so results are fetched a
 	// page at a time and accumulated rather than paged through in the UI.
@@ -187,9 +188,9 @@
 	}
 
 	const hasFilters = $derived(Boolean(query.trim() || activeTags.size));
-	// The search box and tag chips filter places, so they are hidden on the trips
-	// tab rather than sitting there doing nothing.
-	const placesFilters = $derived(view !== 'trips');
+	// The search box and tag chips filter the places list, so they are hidden on
+	// the trips and near-me tabs rather than sitting there doing nothing.
+	const placesFilters = $derived(view !== 'trips' && view !== 'nearme');
 	const popularTags = $derived(tags.slice(0, POPULAR_TAG_COUNT));
 	// Only the map cares about this, but it's cheap and keeps the notice honest.
 	const unmapped = $derived(places.filter((p) => p.lat == null || p.lng == null).length);
@@ -225,6 +226,13 @@
 					aria-pressed={view === 'trips'}
 					onclick={showTrips}>Trips</button
 				>
+				<button
+					type="button"
+					class="toggle-btn"
+					class:active={view === 'nearme'}
+					aria-pressed={view === 'nearme'}
+					onclick={() => (view = 'nearme')}>Near me</button
+				>
 			</div>
 
 			{#if placesFilters}
@@ -238,7 +246,9 @@
 			{/if}
 
 			<span class="count" aria-live="polite">
-				{#if view === 'trips'}
+				{#if view === 'nearme'}
+					<!-- NearMeView shows its own count -->
+				{:else if view === 'trips'}
 					{#if tripsLoading}loading…{:else}{trips.length}
 						{trips.length === 1 ? 'trip' : 'trips'}{/if}
 				{:else if loading}loading…{:else}{total}
@@ -266,8 +276,10 @@
 		{/if}
 	</header>
 
-	<main class="content" class:content--map={view === 'map'}>
-		{#if view === 'trips'}
+	<main class="content" class:content--map={view === 'map' || view === 'nearme'}>
+		{#if view === 'nearme'}
+			<NearMeView />
+		{:else if view === 'trips'}
 			{#if openTripId}
 				{#if tripDetailLoading}
 					<div class="notice"><p>Loading trip…</p></div>

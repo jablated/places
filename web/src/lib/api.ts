@@ -37,6 +37,11 @@ export interface ListParams {
 	tags?: string[];
 	city?: string;
 	q?: string;
+	/** Bounding box; the API applies it only when all four are present. */
+	sw_lat?: number;
+	sw_lng?: number;
+	ne_lat?: number;
+	ne_lng?: number;
 }
 
 /** A named collection of places, optionally grouped into route segments. */
@@ -150,6 +155,10 @@ function buildQuery(params: ListParams): string {
 	for (const tag of params.tags ?? []) q.append('tag', tag);
 	if (params.city) q.set('city', params.city);
 	if (params.q) q.set('q', params.q);
+	if (params.sw_lat != null) q.set('sw_lat', String(params.sw_lat));
+	if (params.sw_lng != null) q.set('sw_lng', String(params.sw_lng));
+	if (params.ne_lat != null) q.set('ne_lat', String(params.ne_lat));
+	if (params.ne_lng != null) q.set('ne_lng', String(params.ne_lng));
 	const s = q.toString();
 	return s ? `?${s}` : '';
 }
