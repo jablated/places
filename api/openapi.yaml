@@ -1,0 +1,892 @@
+openapi: 3.1.0
+
+info:
+  title: Places API
+  version: 1.0.0
+  description: |
+    Personal NYC places wiki API.
+
+    A **place** is a single wiki entry (a restaurant, a museum, a walk). A
+    **trip** is a named, curated itinerary of places, optionally split into
+    route segments.
+
+    Conventions:
+
+    - All request and response bodies are JSON. Write endpoints reject unknown
+      fields and bodies larger than 1 MiB with `400`.
+    - `POST`/`PUT` bodies are partial: on `PUT`, an omitted field is left
+      unchanged, while a field sent with its zero value (`""`, `false`, `[]`)
+      is cleared.
+    - Tags are trimmed, lowercased and de-duplicated on write. Order is kept.
+    - Slugs are derived from the name when not supplied, and a numeric suffix
+      (`-2`, `-3`, …) is added if the slug is already taken.
+    - Timestamps are RFC 3339 strings in UTC.
+    - Errors are returned as `{"error": "..."}`.
+
+servers:
+  - url: /
+    description: Same origin — the binary serves both the API and the frontend.
+
+tags:
+  - name: health
+    description: Liveness and database checks.
+  - name: places
+    description: Wiki entries.
+  - name: tags
+    description: Tag facets across all places.
+  - name: trips
+    description: Curated itineraries of places.
+
+paths:
+  /health:
+    get:
+      tags: [health]
+      operationId: rootHealth
+      summary: Health check (root alias)
+      description: Identical to `GET /api/health`, exposed at the root for probes.
+      responses:
+        "200":
+          $ref: "#/components/responses/HealthOK"
+        "503":
+          $ref: "#/components/responses/HealthUnavailable"
+
+  /api/health:
+    get:
+      tags: [health]
+      operationId: health
+      summary: Health check
+      description: Reports database reachability, row counts, and whether a frontend is built into the binary.
+      responses:
+        "200":
+          $ref: "#/components/responses/HealthOK"
+        "503":
+          $ref: "#/components/responses/HealthUnavailable"
+
+  /api/tags:
+    get:
+      tags: [tags]
+      operationId: listTags
+      summary: List all tags with counts
+      description: Every distinct tag across all places, sorted by count descending, then by tag ascending.
+      responses:
+        "200":
+          description: All tags.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TagListResponse"
+              example:
+                data:
+                  - { tag: manhattan, count: 3 }
+                  - { tag: classic, count: 2 }
+                  - { tag: food, count: 2 }
+                  - { tag: art, count: 1 }
+                total: 4
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/places:
+    get:
+      tags: [places]
+      operationId: listPlaces
+      summary: List places
+      description: |
+        Returns one page of places, newest first. Filters are combined with AND.
+
+        The bounding-box filter is applied only when all four of `sw_lat`,
+        `sw_lng`, `ne_lat` and `ne_lng` are present. Places without coordinates
+        never match it. A malformed or missing value turns the bounding-box
+        filter off; it does not cause an error.
+      parameters:
+        - name: page
+          in: query
+          description: 1-based page number. Values below 1, or values that are not integers, become 1.
+          schema: { type: integer, minimum: 1, default: 1 }
+        - name: per_page
+          in: query
+          description: Page size. Values below 1, or values that are not integers, become 20. Values above 100 become 100.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: q
+          in: query
+          description: Case-insensitive substring match against `name`, `description` and `neighborhood`. `%` and `_` are matched literally.
+          schema: { type: string }
+        - name: tag
+          in: query
+          description: Tag filter. Repeat the parameter to require several tags; a place must have **all** of them. Matching ignores case.
+          style: form
+          explode: true
+          schema:
+            type: array
+            items: { type: string }
+          example: [food, manhattan]
+        - name: city
+          in: query
+          description: Exact city match, ignoring case.
+          schema: { type: string }
+          example: New York
+        - name: sw_lat
+          in: query
+          description: Latitude of the bounding box's south-west corner.
+          schema: { type: number, format: double, minimum: -90, maximum: 90 }
+        - name: sw_lng
+          in: query
+          description: Longitude of the bounding box's south-west corner.
+          schema: { type: number, format: double, minimum: -180, maximum: 180 }
+        - name: ne_lat
+          in: query
+          description: Latitude of the bounding box's north-east corner.
+          schema: { type: number, format: double, minimum: -90, maximum: 90 }
+        - name: ne_lng
+          in: query
+          description: Longitude of the bounding box's north-east corner.
+          schema: { type: number, format: double, minimum: -180, maximum: 180 }
+      responses:
+        "200":
+          description: A page of places.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ListResponse"
+              example:
+                data:
+                  - id: 6f1c2a4e-8d3b-4c5e-9a7f-1b2c3d4e5f60
+                    name: Katz's Delicatessen
+                    slug: katzs-delicatessen
+                    description: "Cash-and-ticket pastrami institution open since 1888.\n\nGo at an off hour; the line at 1pm Saturday is real."
+                    source_url: https://www.katzsdelicatessen.com/
+                    lat: 40.7223
+                    lng: -73.9874
+                    city: New York
+                    neighborhood: Lower East Side
+                    tags: [food, deli, classic, manhattan]
+                    visited: true
+                    created_at: "2026-09-15T20:55:12Z"
+                    updated_at: "2026-09-15T20:55:12Z"
+                  - id: 0a9b8c7d-6e5f-4a3b-8c2d-1e0f9a8b7c6d
+                    name: McSorley's Old Ale House
+                    slug: mcsorleys-old-ale-house
+                    description: Sawdust on the floor, two choices (light or dark), served two mugs at a time.
+                    source_url: https://www.mcsorleysoldalehouse.nyc/
+                    lat: 40.7286
+                    lng: -73.9897
+                    city: New York
+                    neighborhood: East Village
+                    tags: [bar, classic, history, manhattan]
+                    visited: false
+                    created_at: "2026-09-15T20:55:12Z"
+                    updated_at: "2026-09-15T20:55:12Z"
+                total: 2
+                page: 1
+                per_page: 20
+                total_pages: 1
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      tags: [places]
+      operationId: createPlace
+      summary: Create a place
+      description: |
+        `name` is required. `city` defaults to `New York`. `lat` and `lng` must
+        be sent together.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/PlaceInput"
+                - required: [name]
+            example:
+              name: The Cloisters
+              neighborhood: Washington Heights
+              description: The Met's medieval branch, perched above the Hudson in Fort Tryon Park.
+              source_url: https://www.metmuseum.org/visit/plan-your-visit/met-cloisters
+              lat: 40.8649
+              lng: -73.9319
+              tags: [museum, art, outdoors, manhattan]
+      responses:
+        "201":
+          description: Created.
+          headers:
+            Location:
+              description: URL of the new place, e.g. `/api/places/{id}`.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Place"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/places/slug/{slug}:
+    get:
+      tags: [places]
+      operationId: getPlaceBySlug
+      summary: Get a place by slug
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+      responses:
+        "200":
+          description: The place.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Place"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/places/{id}:
+    parameters:
+      - $ref: "#/components/parameters/PlaceID"
+    get:
+      tags: [places]
+      operationId: getPlace
+      summary: Get a place by ID
+      responses:
+        "200":
+          description: The place.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Place"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    put:
+      tags: [places]
+      operationId: updatePlace
+      summary: Update a place (partial)
+      description: |
+        Omitted fields are left unchanged. `name` cannot be set to blank. A
+        blank `city` resets it to `New York`. The pin is replaced only if the
+        body contains `lat` or `lng`, and both must be sent together. A blank
+        `slug` regenerates the slug from the name. `created_at` never changes;
+        `updated_at` is always set to the current time.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PlaceInput"
+            example:
+              visited: true
+              tags: [museum, art, outdoors, manhattan, favorite]
+      responses:
+        "200":
+          description: The updated place.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Place"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      tags: [places]
+      operationId: deletePlace
+      summary: Delete a place
+      description: Also removes the place from any trips it is on. Deleting a place that is already gone returns `404`.
+      responses:
+        "204":
+          description: Deleted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/trips:
+    get:
+      tags: [trips]
+      operationId: listTrips
+      summary: List trips
+      description: Every trip, newest first. This endpoint is not paginated.
+      responses:
+        "200":
+          description: All trips.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripListResponse"
+              example:
+                data:
+                  - id: 3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f
+                    name: NYC Design Shopping Crawl
+                    slug: nyc-design-shopping-crawl
+                    description: Ten furniture and design dealers across Manhattan, Brooklyn and Queens, split into three walkable runs.
+                    trip_type: crawl
+                    tags: [design, shopping]
+                    duration_days: 2
+                    place_count: 10
+                    source_url: ""
+                    created_at: "2026-09-15T21:15:03Z"
+                    updated_at: "2026-09-15T21:15:03Z"
+                total: 1
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    post:
+      tags: [trips]
+      operationId: createTrip
+      summary: Create a trip
+      description: |
+        `name` is required. `trip_type` defaults to `trip`. The new trip has no
+        stops; add them with `POST /api/trips/{id}/places`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/TripInput"
+                - required: [name]
+            example:
+              name: Brooklyn Pizza Walk
+              trip_type: crawl
+              tags: [food, pizza, brooklyn]
+              duration_days: 1
+      responses:
+        "201":
+          description: Created. The body is the trip without its routes.
+          headers:
+            Location:
+              description: URL of the new trip, e.g. `/api/trips/{id}`.
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trip"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/trips/slug/{slug}:
+    get:
+      tags: [trips]
+      operationId: getTripBySlug
+      summary: Get a trip by slug, with routes
+      parameters:
+        - $ref: "#/components/parameters/Slug"
+      responses:
+        "200":
+          description: The trip and its stops, grouped into routes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/trips/{id}:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+    get:
+      tags: [trips]
+      operationId: getTrip
+      summary: Get a trip by ID, with routes
+      responses:
+        "200":
+          description: The trip and its stops, grouped into routes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    put:
+      tags: [trips]
+      operationId: updateTrip
+      summary: Update a trip's metadata (partial)
+      description: |
+        Omitted fields are left unchanged. Stops are not changed here; use the
+        `/places` sub-resource. A `duration_days` of 0 or less clears the
+        duration. A blank `trip_type` resets it to `trip`. A blank `slug`
+        regenerates the slug from the name.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TripInput"
+            example:
+              duration_days: 0
+      responses:
+        "200":
+          description: The updated trip, without its routes.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Trip"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+    delete:
+      tags: [trips]
+      operationId: deleteTrip
+      summary: Delete a trip
+      description: Removes the trip and its stop list. The places themselves are not deleted.
+      responses:
+        "204":
+          description: Deleted.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/trips/{id}/places:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+    post:
+      tags: [trips]
+      operationId: addTripPlace
+      summary: Add a place to a trip (or update its stop)
+      description: |
+        Adds the place as a stop. If the place is already a stop on this trip,
+        this call replaces the stop's `route`, `route_order` and `stop_notes`
+        instead of returning a conflict. Any of those fields you omit are reset
+        to empty or `0`. The trip's `updated_at` is set to the current time.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TripPlaceInput"
+            example:
+              place_id: 6f1c2a4e-8d3b-4c5e-9a7f-1b2c3d4e5f60
+              route: Route 1 — Downtown Manhattan
+              route_order: 0
+              stop_notes: Start here.
+      responses:
+        "201":
+          description: The stop as stored.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TripStop"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          description: The trip or the place does not exist.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                trip:
+                  value: { error: trip not found }
+                place:
+                  value: { error: place not found }
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/trips/{id}/places/{placeId}:
+    parameters:
+      - $ref: "#/components/parameters/TripID"
+      - name: placeId
+        in: path
+        required: true
+        description: ID of the place to remove from the trip.
+        schema: { type: string, format: uuid }
+    delete:
+      tags: [trips]
+      operationId: removeTripPlace
+      summary: Remove a place from a trip
+      description: The place itself is not deleted. The trip's `updated_at` is set to the current time.
+      responses:
+        "204":
+          description: Removed.
+        "404":
+          description: The trip does not exist, or the place is not a stop on it.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+              examples:
+                trip:
+                  value: { error: trip not found }
+                notAStop:
+                  value: { error: "trip not found: that place is not a stop on this trip" }
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/openapi.yaml:
+    get:
+      tags: [health]
+      operationId: getOpenAPIYAML
+      summary: This specification (YAML)
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/yaml:
+              schema: { type: string }
+
+  /api/openapi.json:
+    get:
+      tags: [health]
+      operationId: getOpenAPIJSON
+      summary: This specification (JSON)
+      responses:
+        "200":
+          description: The OpenAPI document.
+          content:
+            application/json:
+              schema: { type: object }
+
+  /api/docs:
+    get:
+      tags: [health]
+      operationId: getDocs
+      summary: Rendered API reference (Redoc)
+      responses:
+        "200":
+          description: HTML page.
+          content:
+            text/html:
+              schema: { type: string }
+
+components:
+  parameters:
+    PlaceID:
+      name: id
+      in: path
+      required: true
+      description: Place ID.
+      schema: { type: string, format: uuid }
+    TripID:
+      name: id
+      in: path
+      required: true
+      description: Trip ID.
+      schema: { type: string, format: uuid }
+    Slug:
+      name: slug
+      in: path
+      required: true
+      description: URL slug, e.g. `katzs-delicatessen`.
+      schema: { type: string, maxLength: 200, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$" }
+
+  responses:
+    HealthOK:
+      description: Healthy.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Health"
+          example: { status: ok, places: 15, trips: 1, frontend: true }
+    HealthUnavailable:
+      description: The database is unreachable.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/HealthError"
+          example: { status: error, error: database unavailable }
+    BadRequest:
+      description: Invalid JSON, an unknown field, or a validation failure.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          examples:
+            validation:
+              value: { error: "invalid place: lat and lng must be set together" }
+            unknownField:
+              value: { error: "invalid JSON body: json: unknown field \"id\"" }
+    NotFound:
+      description: No resource with that ID or slug.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { error: place not found }
+    InternalError:
+      description: Unexpected server error.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example: { error: internal error }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: A readable message.
+      example: { error: place not found }
+
+    Health:
+      type: object
+      required: [status, places, trips, frontend]
+      properties:
+        status: { type: string, const: ok }
+        places: { type: integer, description: Total number of places. }
+        trips: { type: integer, description: Total number of trips. }
+        frontend: { type: boolean, description: Whether a built frontend is embedded in this binary. }
+
+    HealthError:
+      type: object
+      required: [status, error]
+      properties:
+        status: { type: string, const: error }
+        error: { type: string }
+
+    Place:
+      type: object
+      description: A single wiki entry.
+      required: [id, name, slug, description, source_url, lat, lng, city, neighborhood, tags, visited, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        name:
+          type: string
+          maxLength: 300
+        slug:
+          type: string
+          maxLength: 200
+          description: A unique, URL-friendly identifier.
+        description:
+          type: string
+          maxLength: 200000
+          description: Markdown body.
+        source_url:
+          type: string
+          maxLength: 2048
+          description: Where the entry came from. Empty string if unknown.
+        lat:
+          type: [number, "null"]
+          format: double
+          minimum: -90
+          maximum: 90
+          description: Latitude. `null` if the place has not been pinned. `lat` and `lng` are always both set or both `null`.
+        lng:
+          type: [number, "null"]
+          format: double
+          minimum: -180
+          maximum: 180
+          description: Longitude. `null` if the place has not been pinned.
+        city:
+          type: string
+          default: New York
+        neighborhood:
+          type: string
+        tags:
+          type: array
+          maxItems: 30
+          items: { type: string, maxLength: 64 }
+          description: Lowercase and unique.
+        visited:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      example:
+        id: 6f1c2a4e-8d3b-4c5e-9a7f-1b2c3d4e5f60
+        name: Katz's Delicatessen
+        slug: katzs-delicatessen
+        description: "Cash-and-ticket pastrami institution open since 1888. Grab a ticket at the door, order at the counter (tip the cutter), and *do not* lose the ticket.\n\nGo at an off hour; the line at 1pm Saturday is real."
+        source_url: https://www.katzsdelicatessen.com/
+        lat: 40.7223
+        lng: -73.9874
+        city: New York
+        neighborhood: Lower East Side
+        tags: [food, deli, classic, manhattan]
+        visited: true
+        created_at: "2026-09-15T20:55:12Z"
+        updated_at: "2026-09-16T01:42:30Z"
+
+    PlaceInput:
+      type: object
+      description: The fields you can write on a place. All are optional here; `POST` requires `name`.
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 300, description: Must not be blank. }
+        slug: { type: string, description: Converted to a slug and made unique. If blank, the slug is derived from `name`. }
+        description: { type: string, maxLength: 200000 }
+        source_url: { type: string, maxLength: 2048 }
+        lat: { type: number, format: double, minimum: -90, maximum: 90, description: Must be sent with `lng`. }
+        lng: { type: number, format: double, minimum: -180, maximum: 180, description: Must be sent with `lat`. }
+        city: { type: string, description: A blank value becomes `New York`. }
+        neighborhood: { type: string }
+        tags:
+          type: array
+          maxItems: 30
+          items: { type: string, maxLength: 64 }
+        visited: { type: boolean }
+
+    TagCount:
+      type: object
+      required: [tag, count]
+      properties:
+        tag: { type: string }
+        count: { type: integer, minimum: 1, description: Number of places with this tag. }
+      example: { tag: food, count: 2 }
+
+    TagListResponse:
+      type: object
+      required: [data, total]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/TagCount" }
+        total: { type: integer, description: Number of distinct tags. }
+
+    ListResponse:
+      type: object
+      description: A page of places.
+      required: [data, total, page, per_page, total_pages]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Place" }
+        total: { type: integer, description: Number of matches across all pages. }
+        page: { type: integer, minimum: 1 }
+        per_page: { type: integer, minimum: 1, maximum: 100 }
+        total_pages: { type: integer, minimum: 1, description: Always at least 1, even when there are no results. }
+
+    Trip:
+      type: object
+      description: A curated itinerary. The list endpoint and write endpoints return this shape, without routes.
+      required: [id, name, slug, description, trip_type, tags, duration_days, place_count, source_url, created_at, updated_at]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        name: { type: string, maxLength: 300 }
+        slug: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 200000, description: Markdown body. }
+        trip_type:
+          type: string
+          maxLength: 64
+          default: trip
+          description: A lowercase, free-form category, e.g. `trip` or `crawl`.
+          examples: [trip, crawl]
+        tags:
+          type: array
+          maxItems: 30
+          items: { type: string, maxLength: 64 }
+        duration_days:
+          type: [integer, "null"]
+          minimum: 1
+          maximum: 3650
+          description: Length of the trip in days. `null` if not set.
+        place_count:
+          type: integer
+          minimum: 0
+          readOnly: true
+          description: Number of stops on the trip, computed for each request.
+        source_url: { type: string, maxLength: 2048 }
+        created_at: { type: string, format: date-time, readOnly: true }
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+          description: Updated when the trip's metadata or its stops change.
+
+    TripInput:
+      type: object
+      description: The fields you can write on a trip. All are optional here; `POST` requires `name`.
+      additionalProperties: false
+      properties:
+        name: { type: string, maxLength: 300, description: Must not be blank. }
+        slug: { type: string, description: Converted to a slug and made unique. If blank, the slug is derived from `name`. }
+        description: { type: string, maxLength: 200000 }
+        trip_type: { type: string, maxLength: 64, description: Converted to lowercase. A blank value becomes `trip`. }
+        tags:
+          type: array
+          maxItems: 30
+          items: { type: string, maxLength: 64 }
+        duration_days: { type: integer, maximum: 3650, description: A value of 0 or less clears the duration. }
+        source_url: { type: string, maxLength: 2048 }
+
+    TripStop:
+      description: A place as it appears on a trip. It has every Place field, plus its position and notes on this trip.
+      allOf:
+        - $ref: "#/components/schemas/Place"
+        - type: object
+          required: [route, route_order, stop_notes]
+          properties:
+            route:
+              type: string
+              maxLength: 200
+              description: Name of the route segment. Empty string if the stop has no route.
+            route_order:
+              type: integer
+              description: Position within the route. Numbering usually restarts at 0 for each route.
+            stop_notes:
+              type: string
+              maxLength: 20000
+
+    TripPlaceInput:
+      type: object
+      description: Body for adding a place to a trip, or updating its stop.
+      additionalProperties: false
+      required: [place_id]
+      properties:
+        place_id: { type: string, format: uuid }
+        route: { type: string, maxLength: 200 }
+        route_order: { type: integer, default: 0 }
+        stop_notes: { type: string, maxLength: 20000 }
+
+    TripRoute:
+      type: object
+      description: One route segment of a trip, with its stops in order.
+      required: [label, stops]
+      properties:
+        label:
+          type: string
+          description: The route name. Stops with no route are grouped under `Stops`, which always comes last.
+        stops:
+          type: array
+          items: { $ref: "#/components/schemas/TripStop" }
+
+    TripDetail:
+      description: A trip with its stops grouped into routes. Routes are sorted by label, and stops within a route by `route_order`, then by name.
+      allOf:
+        - $ref: "#/components/schemas/Trip"
+        - type: object
+          required: [routes]
+          properties:
+            routes:
+              type: array
+              items: { $ref: "#/components/schemas/TripRoute" }
+
+    TripListResponse:
+      type: object
+      description: |
+        Every trip. Unlike `ListResponse`, this is not paginated: the server
+        returns only `data` and `total`, with no `page`, `per_page` or
+        `total_pages`.
+      required: [data, total]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Trip" }
+        total: { type: integer }

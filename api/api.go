@@ -158,6 +158,10 @@ func (s *Server) Handler() http.Handler {
 			r.Delete("/{id}/places/{placeId}", s.handleRemoveTripPlace)
 		})
 
+		r.Get("/openapi.yaml", handleOpenAPIYAML)
+		r.Get("/openapi.json", handleOpenAPIJSON)
+		r.Get("/docs", handleDocs)
+
 		// Anything else under /api is a client mistake — answer as JSON rather
 		// than falling through to the SPA and returning HTML to a fetch().
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
