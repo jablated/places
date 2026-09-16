@@ -6,12 +6,15 @@
 	let {
 		places = [],
 		onTagClick,
-		distanceFrom
+		distanceFrom,
+		onPlaceClick
 	}: {
 		places: Place[];
 		onTagClick?: (tag: string) => void;
 		/** When set, each card shows its distance from this point. */
 		distanceFrom?: { lat: number; lng: number };
+		/** When set, card titles become buttons that open the place. */
+		onPlaceClick?: (id: string) => void;
 	} = $props();
 </script>
 
@@ -19,7 +22,13 @@
 	{#each places as place (place.id)}
 		<article class="card">
 			<header class="card-head">
-				<h2 class="card-title">{place.name}</h2>
+				{#if onPlaceClick}
+					<button type="button" class="card-title card-title-btn" onclick={() => onPlaceClick(place.id)}
+						>{place.name}</button
+					>
+				{:else}
+					<h2 class="card-title">{place.name}</h2>
+				{/if}
 				{#if place.visited}
 					<span class="badge-visited" title="Visited">✓ visited</span>
 				{/if}
@@ -55,6 +64,15 @@
 				<a class="card-link" href={place.source_url} target="_blank" rel="noopener noreferrer">
 					{hostOf(place.source_url)} ↗
 				</a>
+			{/if}
+
+			{#if place.lat != null && place.lng != null}
+				<a
+					class="card-nav"
+					href="https://www.google.com/maps/dir/?api=1&destination={place.lat},{place.lng}"
+					target="_blank"
+					rel="noopener noreferrer">Navigate ↗</a
+				>
 			{/if}
 		</article>
 	{/each}
@@ -93,6 +111,23 @@
 		font-size: 1.05rem;
 		font-weight: 600;
 		line-height: 1.3;
+	}
+
+	.card-title-btn {
+		border: 0;
+		background: none;
+		padding: 0;
+		font: inherit;
+		font-size: 1.05rem;
+		font-weight: 600;
+		line-height: 1.3;
+		text-align: left;
+		cursor: pointer;
+		color: inherit;
+	}
+
+	.card-title-btn:hover {
+		text-decoration: underline;
 	}
 
 	.badge-visited {
@@ -165,6 +200,16 @@
 	}
 
 	.card-link:hover {
+		text-decoration: underline;
+	}
+
+	.card-nav {
+		color: #059669;
+		font-size: 0.8rem;
+		text-decoration: none;
+	}
+
+	.card-nav:hover {
 		text-decoration: underline;
 	}
 </style>

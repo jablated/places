@@ -6,6 +6,7 @@
 	import TripsView from '$lib/components/TripsView.svelte';
 	import TripDetailView from '$lib/components/TripDetailView.svelte';
 	import NearMeView from '$lib/components/NearMeView.svelte';
+	import PlaceDetailView from '$lib/components/PlaceDetailView.svelte';
 
 	type View = 'map' | 'list' | 'trips' | 'nearme';
 
@@ -38,6 +39,9 @@
 	let openTripId = $state('');
 	let tripDetailLoading = $state(false);
 	let tripDetailError = $state('');
+
+	// Set from a map popup or list card; overlays the whole content pane.
+	let selectedPlaceId = $state('');
 
 	// Only the newest in-flight request may write to state; an older one that
 	// resolves late is aborted and its result discarded.
@@ -147,9 +151,22 @@
 		openTrip = null;
 	}
 
+	function showView(next: View) {
+		view = next;
+		selectedPlaceId = '';
+	}
+
 	function showTrips() {
-		view = 'trips';
+		showView('trips');
 		if (!tripsLoaded && !tripsLoading) loadTrips();
+	}
+
+	function openPlaceDetail(id: string) {
+		selectedPlaceId = id;
+	}
+
+	function closePlaceDetail() {
+		selectedPlaceId = '';
 	}
 
 	onMount(() => {
@@ -210,14 +227,14 @@
 					class="toggle-btn"
 					class:active={view === 'map'}
 					aria-pressed={view === 'map'}
-					onclick={() => (view = 'map')}>Map</button
+					onclick={() => showView('map')}>Map</button
 				>
 				<button
 					type="button"
 					class="toggle-btn"
 					class:active={view === 'list'}
 					aria-pressed={view === 'list'}
-					onclick={() => (view = 'list')}>List</button
+					onclick={() => showView('list')}>List</button
 				>
 				<button
 					type="button"
@@ -231,7 +248,7 @@
 					class="toggle-btn"
 					class:active={view === 'nearme'}
 					aria-pressed={view === 'nearme'}
-					onclick={() => (view = 'nearme')}>Near me</button
+					onclick={() => showView('nearme')}>Near me</button
 				>
 			</div>
 
@@ -277,7 +294,9 @@
 	</header>
 
 	<main class="content" class:content--map={view === 'map' || view === 'nearme'}>
-		{#if view === 'nearme'}
+		{#if selectedPlaceId}
+			<PlaceDetailView placeId={selectedPlaceId} onBack={closePlaceDetail} />
+		{:else if view === 'nearme'}
 			<NearMeView />
 		{:else if view === 'trips'}
 			{#if openTripId}
@@ -319,7 +338,7 @@
 				{/if}
 			</div>
 		{:else if view === 'map'}
-			<MapView {places} />
+			<MapView {places} onPlaceClick={openPlaceDetail} />
 			{#if unmapped > 0}
 				<p class="map-note">
 					{unmapped}
@@ -327,10 +346,10 @@
 				</p>
 			{/if}
 		{:else}
-			<ListView {places} onTagClick={toggleTag} />
+			<ListView {places} onTagClick={toggleTag} onPlaceClick={openPlaceDetail} />
 		{/if}
 
-		{#if truncated && placesFilters}
+		{#if truncated && placesFilters && !selectedPlaceId}
 			<p class="map-note map-note--warn">
 				Showing the first {places.length} of {total} places.
 			</p>

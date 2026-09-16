@@ -26,7 +26,8 @@
 		fit = false,
 		userLocation,
 		onViewportChange,
-		recenterTick
+		recenterTick,
+		onPlaceClick
 	}: {
 		places: Place[];
 		annotate?: (place: Place) => MapAnnotation | undefined;
@@ -38,6 +39,8 @@
 		onViewportChange?: (bbox: BBox) => void;
 		/** Bump to fly back to userLocation. */
 		recenterTick?: number;
+		/** Called with a place id when its popup title is clicked. */
+		onPlaceClick?: (id: string) => void;
 	} = $props();
 
 	// NYC default viewport, per spec.
@@ -80,7 +83,11 @@
 	const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 	function popupHtml(p: Place, ann?: MapAnnotation): string {
-		const parts = [`<h3 class="popup-title">${escapeHtml(p.name)}</h3>`];
+		// No href: the click is caught by the delegated listener in onMount so
+		// Svelte handles it. p.id is a UUID, so it is safe to inline unescaped.
+		const parts = [
+			`<h3 class="popup-title"><a class="popup-title-link" data-place-id="${p.id}">${escapeHtml(p.name)}</a></h3>`
+		];
 
 		if (ann?.label) parts.push(`<p class="popup-route">${escapeHtml(ann.label)}</p>`);
 
@@ -100,6 +107,12 @@
 			// rel=noopener because the popup opens a third-party link in a new tab.
 			parts.push(
 				`<p><a class="popup-link" href="${escapeHtml(p.source_url)}" target="_blank" rel="noopener noreferrer">source ↗</a></p>`
+			);
+		}
+
+		if (p.lat != null && p.lng != null) {
+			parts.push(
+				`<p><a class="popup-nav" href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lng}" target="_blank" rel="noopener noreferrer">Navigate ↗</a></p>`
 			);
 		}
 
@@ -144,6 +157,16 @@
 		let disposed = false;
 		let viewportTimer: ReturnType<typeof setTimeout> | null = null;
 		let onMoveEnd: (() => void) | null = null;
+
+		// Popups are raw HTML outside Svelte, so title clicks are delegated from
+		// the map container back to the onPlaceClick prop.
+		const handlePopupClick = (e: MouseEvent) => {
+			const a = (e.target as HTMLElement).closest('[data-place-id]');
+			if (!a) return;
+			e.preventDefault();
+			const id = a.getAttribute('data-place-id');
+			if (id) onPlaceClick?.(id);
+		};
 
 		(async () => {
 			try {
@@ -200,6 +223,7 @@
 
 				markerLayer = L.layerGroup().addTo(map);
 				renderMarkers(places);
+				container.addEventListener('click', handlePopupClick);
 			} catch (err) {
 				error = err instanceof Error ? err.message : 'failed to load the map';
 			}
@@ -207,6 +231,7 @@
 
 		return () => {
 			disposed = true;
+			container.removeEventListener('click', handlePopupClick);
 			if (viewportTimer) clearTimeout(viewportTimer);
 			if (onMoveEnd) map?.off('moveend zoomend', onMoveEnd);
 			map?.remove();
@@ -307,6 +332,16 @@
 		font-size: 1rem;
 	}
 
+	:global(.popup-title-link) {
+		color: inherit;
+		text-decoration: none;
+		cursor: pointer;
+	}
+
+	:global(.popup-title-link:hover) {
+		text-decoration: underline;
+	}
+
 	:global(.popup-route) {
 		margin: 0 0 0.25rem;
 		color: #4338ca;
@@ -350,6 +385,11 @@
 
 	:global(.popup-link) {
 		color: #4338ca;
+		font-size: 0.82rem;
+	}
+
+	:global(.popup-nav) {
+		color: #059669;
 		font-size: 0.82rem;
 	}
 </style>

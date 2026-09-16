@@ -167,7 +167,8 @@ export const api = {
 	listPlaces: (params: ListParams = {}, signal?: AbortSignal) =>
 		request<ListResponse>(`/api/places${buildQuery(params)}`, { signal }),
 
-	getPlace: (id: string) => request<Place>(`/api/places/${encodeURIComponent(id)}`),
+	getPlace: (id: string, signal?: AbortSignal) =>
+		request<Place>(`/api/places/${encodeURIComponent(id)}`, { signal }),
 
 	createPlace: (place: Partial<Place>) =>
 		request<Place>('/api/places', { method: 'POST', body: JSON.stringify(place) }),
