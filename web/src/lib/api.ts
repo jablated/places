@@ -39,6 +39,65 @@ export interface ListParams {
 	q?: string;
 }
 
+/** A named collection of places, optionally grouped into route segments. */
+export interface Trip {
+	id: string;
+	name: string;
+	slug: string;
+	description: string;
+	trip_type: string;
+	tags: string[];
+	duration_days: number | null;
+	/** Live count of stops on the trip, computed server-side per query. */
+	place_count: number;
+	source_url: string;
+	created_at: string;
+	updated_at: string;
+}
+
+/** A place as it appears on a trip: the whole place, plus its itinerary context. */
+export interface TripStop extends Place {
+	route: string;
+	route_order: number;
+	stop_notes: string;
+}
+
+/** One segment of a trip. Stops with no route label arrive under label "Stops". */
+export interface TripRoute {
+	label: string;
+	stops: TripStop[];
+}
+
+/** GET /api/trips/{id} — a trip with its stops already grouped by segment. */
+export interface TripDetail extends Trip {
+	routes: TripRoute[];
+}
+
+/**
+ * The writable subset of a trip. Separate from `Partial<Trip>` because the API
+ * rejects unknown fields, so posting a whole Trip back (id, place_count, …)
+ * would 400.
+ *
+ * `duration_days` is omit-to-keep; send 0 to clear it.
+ */
+export interface TripInput {
+	name?: string;
+	slug?: string;
+	description?: string;
+	trip_type?: string;
+	tags?: string[];
+	duration_days?: number;
+	source_url?: string;
+}
+
+/** Body of POST /api/trips/{id}/places. Re-posting an existing stop updates it. */
+export interface TripStopInput {
+	place_id: string;
+	route?: string;
+	route_order?: number;
+	stop_notes?: string;
+}
+
 // Vite inlines import.meta.env at build time; empty means same-origin.
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/$/, '');
 
@@ -114,5 +173,38 @@ export const api = {
 		request<void>(`/api/places/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
 	listTags: (signal?: AbortSignal) =>
-		request<{ data: TagCount[]; total: number }>('/api/tags', { signal })
+		request<{ data: TagCount[]; total: number }>('/api/tags', { signal }),
+
+	listTrips: (signal?: AbortSignal) =>
+		request<{ data: Trip[]; total: number }>('/api/trips', { signal }),
+
+	getTrip: (id: string, signal?: AbortSignal) =>
+		request<TripDetail>(`/api/trips/${encodeURIComponent(id)}`, { signal }),
+
+	getTripBySlug: (slug: string, signal?: AbortSignal) =>
+		request<TripDetail>(`/api/trips/slug/${encodeURIComponent(slug)}`, { signal }),
+
+	createTrip: (trip: TripInput) =>
+		request<Trip>('/api/trips', { method: 'POST', body: JSON.stringify(trip) }),
+
+	updateTrip: (id: string, patch: TripInput) =>
+		request<Trip>(`/api/trips/${encodeURIComponent(id)}`, {
+			method: 'PUT',
+			body: JSON.stringify(patch)
+		}),
+
+	deleteTrip: (id: string) =>
+		request<void>(`/api/trips/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+	addTripPlace: (tripId: string, stop: TripStopInput) =>
+		request<TripStop>(`/api/trips/${encodeURIComponent(tripId)}/places`, {
+			method: 'POST',
+			body: JSON.stringify(stop)
+		}),
+
+	removeTripPlace: (tripId: string, placeId: string) =>
+		request<void>(
+			`/api/trips/${encodeURIComponent(tripId)}/places/${encodeURIComponent(placeId)}`,
+			{ method: 'DELETE' }
+		)
 };

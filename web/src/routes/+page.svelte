@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { api, ApiError, type Place, type TagCount } from '$lib/api';
+	import { api, ApiError, type Place, type TagCount, type Trip, type TripDetail } from '$lib/api';
 	import MapView from '$lib/components/MapView.svelte';
 	import ListView from '$lib/components/ListView.svelte';
+	import TripsView from '$lib/components/TripsView.svelte';
+	import TripDetailView from '$lib/components/TripDetailView.svelte';
 
-	type View = 'map' | 'list';
+	type View = 'map' | 'list' | 'trips';
 
 	// Map view needs every matching marker at once, so results are fetched a
 	// page at a time and accumulated rather than paged through in the UI.
@@ -24,9 +26,22 @@
 	let error = $state('');
 	let truncated = $state(false);
 
+	// Trips are a separate, unfiltered resource, so they get their own state
+	// rather than sharing the places request cycle. Loaded lazily the first time
+	// the tab is opened — the Map and List views never need them.
+	let trips = $state<Trip[]>([]);
+	let tripsLoading = $state(false);
+	let tripsError = $state('');
+	let tripsLoaded = false;
+	let openTrip = $state<TripDetail | null>(null);
+	let openTripId = $state('');
+	let tripDetailLoading = $state(false);
+	let tripDetailError = $state('');
+
 	// Only the newest in-flight request may write to state; an older one that
 	// resolves late is aborted and its result discarded.
 	let inflight: AbortController | null = null;
+	let tripInflight: AbortController | null = null;
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
 	async function load(q: string, tag: string) {
@@ -81,10 +96,65 @@
 		}
 	}
 
+	async function loadTrips() {
+		tripsLoading = true;
+		tripsError = '';
+		try {
+			const res = await api.listTrips();
+			trips = res.data;
+			tripsLoaded = true;
+		} catch (err) {
+			tripsError = err instanceof ApiError ? err.message : 'failed to load trips';
+			trips = [];
+		} finally {
+			tripsLoading = false;
+		}
+	}
+
+	async function openTripDetail(id: string) {
+		tripInflight?.abort();
+		const ctrl = new AbortController();
+		tripInflight = ctrl;
+
+		openTripId = id;
+		openTrip = null;
+		tripDetailLoading = true;
+		tripDetailError = '';
+
+		try {
+			const detail = await api.getTrip(id, ctrl.signal);
+			if (ctrl.signal.aborted) return;
+			openTrip = detail;
+		} catch (err) {
+			if (ctrl.signal.aborted) return;
+			tripDetailError = err instanceof ApiError ? err.message : 'failed to load the trip';
+		} finally {
+			if (tripInflight === ctrl) {
+				tripInflight = null;
+				tripDetailLoading = false;
+			}
+		}
+	}
+
+	function closeTripDetail() {
+		tripInflight?.abort();
+		tripInflight = null;
+		tripDetailLoading = false;
+		tripDetailError = '';
+		openTripId = '';
+		openTrip = null;
+	}
+
+	function showTrips() {
+		view = 'trips';
+		if (!tripsLoaded && !tripsLoading) loadTrips();
+	}
+
 	onMount(() => {
 		loadTags();
 		return () => {
 			inflight?.abort();
+			tripInflight?.abort();
 			if (debounceTimer) clearTimeout(debounceTimer);
 		};
 	});
@@ -113,6 +183,9 @@
 	}
 
 	const hasFilters = $derived(Boolean(query.trim() || activeTag));
+	// The search box and tag chips filter places, so they are hidden on the trips
+	// tab rather than sitting there doing nothing.
+	const placesFilters = $derived(view !== 'trips');
 	const popularTags = $derived(tags.slice(0, POPULAR_TAG_COUNT));
 	// Only the map cares about this, but it's cheap and keeps the notice honest.
 	const unmapped = $derived(places.filter((p) => p.lat == null || p.lng == null).length);
@@ -141,23 +214,35 @@
 					aria-pressed={view === 'list'}
 					onclick={() => (view = 'list')}>List</button
 				>
+				<button
+					type="button"
+					class="toggle-btn"
+					class:active={view === 'trips'}
+					aria-pressed={view === 'trips'}
+					onclick={showTrips}>Trips</button
+				>
 			</div>
 
-			<input
-				class="search"
-				type="search"
-				placeholder="Search places…"
-				aria-label="Search places"
-				bind:value={query}
-			/>
+			{#if placesFilters}
+				<input
+					class="search"
+					type="search"
+					placeholder="Search places…"
+					aria-label="Search places"
+					bind:value={query}
+				/>
+			{/if}
 
 			<span class="count" aria-live="polite">
-				{#if loading}loading…{:else}{total}
+				{#if view === 'trips'}
+					{#if tripsLoading}loading…{:else}{trips.length}
+						{trips.length === 1 ? 'trip' : 'trips'}{/if}
+				{:else if loading}loading…{:else}{total}
 					{total === 1 ? 'place' : 'places'}{/if}
 			</span>
 		</div>
 
-		{#if popularTags.length}
+		{#if placesFilters && popularTags.length}
 			<div class="chips">
 				{#each popularTags as t (t.tag)}
 					<button
@@ -178,7 +263,32 @@
 	</header>
 
 	<main class="content" class:content--map={view === 'map'}>
-		{#if error}
+		{#if view === 'trips'}
+			{#if openTripId}
+				{#if tripDetailLoading}
+					<div class="notice"><p>Loading trip…</p></div>
+				{:else if tripDetailError}
+					<div class="notice notice--error">
+						<p>{tripDetailError}</p>
+						<button type="button" onclick={() => openTripDetail(openTripId)}>Retry</button>
+						<button type="button" onclick={closeTripDetail}>Back to trips</button>
+					</div>
+				{:else if openTrip}
+					<TripDetailView trip={openTrip} onBack={closeTripDetail} />
+				{/if}
+			{:else if tripsLoading}
+				<div class="notice"><p>Loading trips…</p></div>
+			{:else if tripsError}
+				<div class="notice notice--error">
+					<p>{tripsError}</p>
+					<button type="button" onclick={loadTrips}>Retry</button>
+				</div>
+			{:else if trips.length === 0}
+				<div class="notice"><p>No trips yet.</p></div>
+			{:else}
+				<TripsView {trips} onSelect={(trip) => openTripDetail(trip.id)} />
+			{/if}
+		{:else if error}
 			<div class="notice notice--error">
 				<p>{error}</p>
 				<button type="button" onclick={() => load(query, activeTag)}>Retry</button>
@@ -204,7 +314,7 @@
 			<ListView {places} onTagClick={toggleTag} />
 		{/if}
 
-		{#if truncated}
+		{#if truncated && placesFilters}
 			<p class="map-note map-note--warn">
 				Showing the first {places.length} of {total} places.
 			</p>

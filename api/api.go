@@ -90,7 +90,12 @@ func writeStoreError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, "place not found")
-	case errors.Is(err, ErrInvalid):
+	case errors.Is(err, ErrTripNotFound):
+		// The sentinel's own text is "trip not found", so an unwrapped miss reads
+		// correctly and a wrapped one ("...: that place is not a stop on this
+		// trip") keeps the detail.
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrInvalid), errors.Is(err, ErrInvalidTrip):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		log.Printf("places: store error: %v", err)
@@ -140,6 +145,17 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/{id}", s.handleGetPlace)
 			r.Put("/{id}", s.handleUpdatePlace)
 			r.Delete("/{id}", s.handleDeletePlace)
+		})
+
+		r.Route("/trips", func(r chi.Router) {
+			r.Get("/", s.handleListTrips)
+			r.Post("/", s.handleCreateTrip)
+			r.Get("/slug/{slug}", s.handleGetTripBySlug)
+			r.Get("/{id}", s.handleGetTrip)
+			r.Put("/{id}", s.handleUpdateTrip)
+			r.Delete("/{id}", s.handleDeleteTrip)
+			r.Post("/{id}/places", s.handleAddTripPlace)
+			r.Delete("/{id}/places/{placeId}", s.handleRemoveTripPlace)
 		})
 
 		// Anything else under /api is a client mistake — answer as JSON rather
@@ -221,9 +237,19 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	trips, err := s.store.CountTrips()
+	if err != nil {
+		log.Printf("places: health check: %v", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+			"status": "error",
+			"error":  "database unavailable",
+		})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":   "ok",
 		"places":   count,
+		"trips":    trips,
 		"frontend": s.web != nil,
 	})
 }
@@ -323,6 +349,95 @@ func (s *Server) handleListTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"data": tags, "total": len(tags)})
+}
+
+// ---------- trip handlers ----------
+
+func (s *Server) handleListTrips(w http.ResponseWriter, r *http.Request) {
+	trips, err := s.store.ListTrips()
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": trips, "total": len(trips)})
+}
+
+func (s *Server) handleGetTrip(w http.ResponseWriter, r *http.Request) {
+	trip, err := s.store.TripDetailByID(chi.URLParam(r, "id"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, trip)
+}
+
+func (s *Server) handleGetTripBySlug(w http.ResponseWriter, r *http.Request) {
+	trip, err := s.store.TripDetailBySlug(chi.URLParam(r, "slug"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, trip)
+}
+
+func (s *Server) handleCreateTrip(w http.ResponseWriter, r *http.Request) {
+	var in TripInput
+	if err := decodeBody(w, r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	trip, err := s.store.CreateTrip(in)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	w.Header().Set("Location", "/api/trips/"+trip.ID)
+	writeJSON(w, http.StatusCreated, trip)
+}
+
+func (s *Server) handleUpdateTrip(w http.ResponseWriter, r *http.Request) {
+	var in TripInput
+	if err := decodeBody(w, r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	trip, err := s.store.UpdateTrip(chi.URLParam(r, "id"), in)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, trip)
+}
+
+func (s *Server) handleDeleteTrip(w http.ResponseWriter, r *http.Request) {
+	if err := s.store.DeleteTrip(chi.URLParam(r, "id")); err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleAddTripPlace(w http.ResponseWriter, r *http.Request) {
+	var in TripPlaceInput
+	if err := decodeBody(w, r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	stop, err := s.store.AddTripPlace(chi.URLParam(r, "id"), in)
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, stop)
+}
+
+func (s *Server) handleRemoveTripPlace(w http.ResponseWriter, r *http.Request) {
+	err := s.store.RemoveTripPlace(chi.URLParam(r, "id"), chi.URLParam(r, "placeId"))
+	if err != nil {
+		writeStoreError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ---------- frontend ----------

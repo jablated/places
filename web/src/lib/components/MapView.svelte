@@ -1,19 +1,45 @@
+<script module lang="ts">
+	/**
+	 * Optional per-marker decoration. `annotate` is how the trip view tints pins
+	 * by route segment and adds the route label and stop notes to the popup,
+	 * without this component needing to know what a trip is. Both extra props
+	 * default to off, so the plain Map view renders exactly as before.
+	 */
+	export interface MapAnnotation {
+		/** Pin fill, as #rgb or #rrggbb. Anything else is ignored. */
+		color?: string;
+		/** A short line above the locality — the route segment, in practice. */
+		label?: string;
+		/** Free text appended to the popup. Escaped here, so pass it raw. */
+		note?: string;
+	}
+</script>
+
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { Place } from '$lib/api';
 
-	let { places = [] }: { places: Place[] } = $props();
+	let {
+		places = [],
+		annotate,
+		fit = false
+	}: {
+		places: Place[];
+		annotate?: (place: Place) => MapAnnotation | undefined;
+		/** Frame the markers on load instead of using the default NYC viewport. */
+		fit?: boolean;
+	} = $props();
 
 	// NYC default viewport, per spec.
 	const DEFAULT_CENTER: [number, number] = [40.7128, -74.006];
 	const DEFAULT_ZOOM = 12;
+	const FIT_PADDING: [number, number] = [40, 40];
+	const FIT_MAX_ZOOM = 15;
 
-	// OpenFreeMap's Liberty style — free, no API key. Note this is a MapLibre
-	// *vector style* document, not an {x}/{y}/{z} raster template, so it is
-	// rendered through the maplibre-gl-leaflet bridge below rather than a plain
-	// L.tileLayer. Everything else (markers, popups, panning) stays vanilla
-	// Leaflet.
-	const STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+	// OpenStreetMap raster tiles — free, no API key, no WebGL required.
+	const TILE_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+	const TILE_ATTRIBUTION =
+		'© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors';
 
 	let container: HTMLDivElement;
 	// Leaflet and MapLibre both touch `window` at import time, so they are
@@ -31,11 +57,22 @@
 		);
 	}
 
-	function popupHtml(p: Place): string {
+	/**
+	 * Colors are written into a style attribute, so only a literal hex value is
+	 * allowed through — callers supply them from their own palette, but this
+	 * component shouldn't be the one place a future caller can inject CSS.
+	 */
+	const HEX_COLOR = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+	function popupHtml(p: Place, ann?: MapAnnotation): string {
 		const parts = [`<h3 class="popup-title">${escapeHtml(p.name)}</h3>`];
+
+		if (ann?.label) parts.push(`<p class="popup-route">${escapeHtml(ann.label)}</p>`);
 
 		const locality = [p.neighborhood, p.city].filter(Boolean).join(', ');
 		if (locality) parts.push(`<p class="popup-meta">${escapeHtml(locality)}</p>`);
+
+		if (ann?.note) parts.push(`<p class="popup-note">${escapeHtml(ann.note)}</p>`);
 
 		if (p.tags.length) {
 			const chips = p.tags.map((t) => `<span class="popup-tag">${escapeHtml(t)}</span>`).join('');
@@ -55,10 +92,11 @@
 	}
 
 	/** A small CSS-only pin, so no marker image assets need bundling. */
-	function pinIcon(visited: boolean) {
+	function pinIcon(visited: boolean, color?: string) {
+		const style = color && HEX_COLOR.test(color) ? ` style="background:${color}"` : '';
 		return L.divIcon({
 			className: 'place-pin-wrap',
-			html: `<span class="place-pin${visited ? ' place-pin--visited' : ''}"></span>`,
+			html: `<span class="place-pin${visited ? ' place-pin--visited' : ''}"${style}></span>`,
 			iconSize: [18, 18],
 			iconAnchor: [9, 9],
 			popupAnchor: [0, -10]
@@ -69,13 +107,21 @@
 	function renderMarkers(list: Place[]) {
 		if (!map || !markerLayer) return;
 		markerLayer.clearLayers();
+		const points: [number, number][] = [];
 		for (const p of list) {
 			// Places without coordinates are wiki entries nobody has pinned yet;
 			// they show up in the list view but have nowhere to go on the map.
 			if (p.lat == null || p.lng == null) continue;
-			L.marker([p.lat, p.lng], { icon: pinIcon(p.visited), title: p.name })
-				.bindPopup(popupHtml(p))
+			const ann = annotate?.(p);
+			L.marker([p.lat, p.lng], { icon: pinIcon(p.visited, ann?.color), title: p.name })
+				.bindPopup(popupHtml(p, ann))
 				.addTo(markerLayer);
+			points.push([p.lat, p.lng]);
+		}
+		// maxZoom keeps a single-marker (or tightly clustered) trip from zooming
+		// to street level, where there is no context left to read.
+		if (fit && points.length) {
+			map.fitBounds(L.latLngBounds(points), { padding: FIT_PADDING, maxZoom: FIT_MAX_ZOOM });
 		}
 	}
 
@@ -86,9 +132,6 @@
 			try {
 				const leaflet = await import('leaflet');
 				await import('leaflet/dist/leaflet.css');
-				await import('maplibre-gl/dist/maplibre-gl.css');
-				// Registers L.maplibreGL as a side effect; must come after Leaflet.
-				await import('@maplibre/maplibre-gl-leaflet');
 
 				if (disposed) return;
 				L = leaflet.default ?? leaflet;
@@ -100,11 +143,7 @@
 					attributionControl: true
 				});
 
-				L.maplibreGL({ style: STYLE_URL }).addTo(map);
-				map.attributionControl.addAttribution(
-					'<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> · ' +
-						'<a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OSM</a>'
-				);
+				L.tileLayer(TILE_URL, { attribution: TILE_ATTRIBUTION, maxZoom: 19 }).addTo(map);
 
 				markerLayer = L.layerGroup().addTo(map);
 				renderMarkers(places);
@@ -125,6 +164,9 @@
 	// because this fires before onMount's async import resolves.
 	$effect(() => {
 		const list = places;
+		// Read annotate as well, so switching trips re-tints the pins even when
+		// the stop list happens to be reference-equal.
+		void annotate;
 		if (map) renderMarkers(list);
 	});
 </script>
@@ -192,10 +234,24 @@
 		font-size: 1rem;
 	}
 
+	:global(.popup-route) {
+		margin: 0 0 0.25rem;
+		color: #4338ca;
+		font-size: 0.76rem;
+		font-weight: 600;
+	}
+
 	:global(.popup-meta) {
 		margin: 0 0 0.4rem;
 		color: #666;
 		font-size: 0.8rem;
+	}
+
+	:global(.popup-note) {
+		margin: 0 0 0.45rem;
+		color: #3f3f46;
+		font-size: 0.8rem;
+		line-height: 1.45;
 	}
 
 	:global(.popup-tags) {

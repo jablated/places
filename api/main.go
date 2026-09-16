@@ -27,8 +27,10 @@ type Config struct {
 	// what the single-binary deployment wants — there the frontend is
 	// same-origin.
 	CORSOrigin string
-	// Seed (SEED) controls whether an empty database gets the starter places.
-	// On by default so a fresh run is immediately useful.
+	// Seed (SEED) controls whether an empty database gets the starter places and
+	// trips. On by default so a fresh run is immediately useful. The two seeds
+	// are independent: an existing database with places but no trips still gets
+	// the starter itineraries, reusing any of their places it already holds.
 	Seed bool
 }
 
@@ -78,6 +80,13 @@ func main() {
 		}
 		if n > 0 {
 			log.Printf("places: seeded %d starter places", n)
+		}
+		t, err := store.SeedTripsIfEmpty()
+		if err != nil {
+			log.Fatalf("places: seed trips: %v", err)
+		}
+		if t > 0 {
+			log.Printf("places: seeded %d starter trips", t)
 		}
 	}
 

@@ -1,37 +1,11 @@
 <script lang="ts">
 	import type { Place } from '$lib/api';
+	import { formatDate, hostOf, preview } from '$lib/format';
 
 	let {
 		places = [],
 		onTagClick
 	}: { places: Place[]; onTagClick?: (tag: string) => void } = $props();
-
-	/** Strips the lightest markdown so the preview reads as prose, not source. */
-	function preview(markdown: string, limit = 220): string {
-		const flat = markdown
-			.replace(/!\[[^\]]*\]\([^)]*\)/g, '') // images
-			.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1') // links → label
-			.replace(/[*_`#>]/g, '')
-			.replace(/\s+/g, ' ')
-			.trim();
-		return flat.length > limit ? `${flat.slice(0, limit).trimEnd()}…` : flat;
-	}
-
-	function formatDate(iso: string): string {
-		const d = new Date(iso);
-		return Number.isNaN(d.getTime())
-			? ''
-			: d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-	}
-
-	/** Shows "example.com" rather than a 90-character URL. */
-	function hostOf(url: string): string {
-		try {
-			return new URL(url).hostname.replace(/^www\./, '');
-		} catch {
-			return url;
-		}
-	}
 </script>
 
 <div class="list">
