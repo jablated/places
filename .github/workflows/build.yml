@@ -1,0 +1,103 @@
+name: Places Image Build
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+
+jobs:
+  build:
+    runs-on: arc-k8s
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      IMAGE: ghcr.io/epic9x/places
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pull mTLS client material from 1Password
+        run: |
+          set -e
+          mkdir -p "$HOME/.bk"
+          chmod 700 "$HOME/.bk"
+          op read 'op://oc1/HL-Infra BuildKit mTLS/ca_pem'     > "$HOME/.bk/ca.pem"
+          op read 'op://oc1/HL-Infra BuildKit mTLS/client_pem' > "$HOME/.bk/cert.pem"
+          op read 'op://oc1/HL-Infra BuildKit mTLS/client_key' > "$HOME/.bk/key.pem"
+          chmod 600 "$HOME/.bk/"*.pem
+
+      - name: Configure remote buildx pointing at in-cluster buildkitd
+        run: |
+          docker buildx rm talos2 2>/dev/null || true
+          docker buildx create --use --name talos2 --driver remote \
+            --driver-opt cacert="$HOME/.bk/ca.pem" \
+            --driver-opt cert="$HOME/.bk/cert.pem" \
+            --driver-opt key="$HOME/.bk/key.pem" \
+            tcp://10.0.0.102:1234
+          docker buildx inspect --bootstrap
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build (PR — push :pr-N tag so cache stays warm)
+        if: github.event_name == 'pull_request'
+        run: |
+          docker buildx build \
+            --builder talos2 \
+            --platform linux/amd64 \
+            --cache-to type=registry,ref=${IMAGE}:cache,mode=max \
+            --cache-from type=registry,ref=${IMAGE}:cache \
+            -t ${IMAGE}:pr-${{ github.event.pull_request.number }} \
+            --push .
+
+      - name: Build and push (main)
+        if: github.event_name == 'push'
+        run: |
+          docker buildx build \
+            --builder talos2 \
+            --platform linux/amd64 \
+            --cache-to type=registry,ref=${IMAGE}:cache,mode=max \
+            --cache-from type=registry,ref=${IMAGE}:cache \
+            -t ${IMAGE}:${{ github.sha }} \
+            -t ${IMAGE}:latest \
+            --push .
+
+      - name: Install kubectl
+        if: github.event_name == 'push'
+        uses: azure/setup-kubectl@v4
+
+      - name: Restart places so the new :latest is pulled
+        if: github.event_name == 'push'
+        run: |
+          KC="$(mktemp)"
+          trap 'rm -f "$KC"' EXIT
+          op read "op://oc1/HL-Infra CI Deployer Kubeconfig/kubeconfig" > "$KC"
+          kubectl --kubeconfig="$KC" rollout restart deployment/places -n places
+          kubectl --kubeconfig="$KC" rollout status deployment/places -n places --timeout=180s
+
+      - name: Wipe local mTLS material
+        if: always()
+        run: rm -rf "$HOME/.bk"
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request' && success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: `## Places image build\n\n✅ Built in-cluster on \`buildkitd\`. Image pushed to \`ghcr.io/epic9x/places:pr-${context.issue.number}\`. On merge, \`<sha>\` and \`:latest\` will be pushed and the pod restarted.`,
+            });
