@@ -84,7 +84,7 @@ type TagCount struct {
 type ListOptions struct {
 	Page    int
 	PerPage int
-	Tag     string
+	Tags    []string
 	City    string
 	Q       string
 }
@@ -396,12 +396,13 @@ func buildFilter(opts ListOptions) (string, []any) {
 	var where []string
 	var args []any
 
-	if tag := normalizeTag(opts.Tag); tag != "" {
-		// json_each expands the stored JSON array into rows, so this matches a
-		// whole tag rather than a substring — a LIKE '%bar%' would also match
-		// "bars" and "barbecue".
-		where = append(where, `EXISTS (SELECT 1 FROM json_each(places.tags) WHERE lower(json_each.value) = ?)`)
-		args = append(args, tag)
+	for _, raw := range opts.Tags {
+		if tag := normalizeTag(raw); tag != "" {
+			// Each tag gets its own EXISTS clause; chaining them with AND means a
+			// place must carry every selected tag (logical AND, not OR).
+			where = append(where, `EXISTS (SELECT 1 FROM json_each(places.tags) WHERE lower(json_each.value) = ?)`)
+			args = append(args, tag)
+		}
 	}
 	if city := strings.TrimSpace(opts.City); city != "" {
 		where = append(where, `lower(city) = lower(?)`)

@@ -34,7 +34,7 @@ export interface ListResponse {
 export interface ListParams {
 	page?: number;
 	per_page?: number;
-	tag?: string;
+	tags?: string[];
 	city?: string;
 	q?: string;
 }
@@ -147,7 +147,7 @@ function buildQuery(params: ListParams): string {
 	const q = new URLSearchParams();
 	if (params.page && params.page > 1) q.set('page', String(params.page));
 	if (params.per_page) q.set('per_page', String(params.per_page));
-	if (params.tag) q.set('tag', params.tag);
+	for (const tag of params.tags ?? []) q.append('tag', tag);
 	if (params.city) q.set('city', params.city);
 	if (params.q) q.set('q', params.q);
 	const s = q.toString();

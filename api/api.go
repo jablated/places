@@ -259,7 +259,7 @@ func (s *Server) handleListPlaces(w http.ResponseWriter, r *http.Request) {
 	opts := ListOptions{
 		Page:    atoiDefault(q.Get("page"), 1),
 		PerPage: atoiDefault(q.Get("per_page"), defaultPerPage),
-		Tag:     q.Get("tag"),
+		Tags:    q["tag"],
 		City:    q.Get("city"),
 		Q:       q.Get("q"),
 	}

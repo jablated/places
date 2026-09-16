@@ -17,7 +17,7 @@
 
 	let view = $state<View>('map');
 	let query = $state('');
-	let activeTag = $state('');
+	let activeTags = $state(new Set<string>());
 
 	let places = $state<Place[]>([]);
 	let tags = $state<TagCount[]>([]);
@@ -44,7 +44,7 @@
 	let tripInflight: AbortController | null = null;
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 
-	async function load(q: string, tag: string) {
+	async function load(q: string, tags: Set<string>) {
 		inflight?.abort();
 		const ctrl = new AbortController();
 		inflight = ctrl;
@@ -57,10 +57,11 @@
 			let page = 1;
 			let totalPages = 1;
 			let totalCount = 0;
+			const tagList = tags.size ? [...tags] : undefined;
 
 			while (page <= totalPages && page <= MAX_PAGES) {
 				const res = await api.listPlaces(
-					{ page, per_page: PER_PAGE, q: q || undefined, tag: tag || undefined },
+					{ page, per_page: PER_PAGE, q: q || undefined, tags: tagList },
 					ctrl.signal
 				);
 				collected.push(...res.data);
@@ -163,10 +164,10 @@
 	// fire a request per keystroke; a tag click applies immediately.
 	$effect(() => {
 		const q = query;
-		const tag = activeTag;
+		const tags = activeTags;
 
 		if (debounceTimer) clearTimeout(debounceTimer);
-		debounceTimer = setTimeout(() => load(q, tag), q ? SEARCH_DEBOUNCE_MS : 0);
+		debounceTimer = setTimeout(() => load(q, tags), q ? SEARCH_DEBOUNCE_MS : 0);
 
 		return () => {
 			if (debounceTimer) clearTimeout(debounceTimer);
@@ -174,15 +175,18 @@
 	});
 
 	function toggleTag(tag: string) {
-		activeTag = activeTag === tag ? '' : tag;
+		const next = new Set(activeTags);
+		if (next.has(tag)) next.delete(tag);
+		else next.add(tag);
+		activeTags = next;
 	}
 
 	function clearFilters() {
 		query = '';
-		activeTag = '';
+		activeTags = new Set();
 	}
 
-	const hasFilters = $derived(Boolean(query.trim() || activeTag));
+	const hasFilters = $derived(Boolean(query.trim() || activeTags.size));
 	// The search box and tag chips filter places, so they are hidden on the trips
 	// tab rather than sitting there doing nothing.
 	const placesFilters = $derived(view !== 'trips');
@@ -248,8 +252,8 @@
 					<button
 						type="button"
 						class="chip"
-						class:active={activeTag === t.tag}
-						aria-pressed={activeTag === t.tag}
+						class:active={activeTags.has(t.tag)}
+						aria-pressed={activeTags.has(t.tag)}
 						onclick={() => toggleTag(t.tag)}
 					>
 						{t.tag}<span class="chip-count">{t.count}</span>
@@ -291,7 +295,7 @@
 		{:else if error}
 			<div class="notice notice--error">
 				<p>{error}</p>
-				<button type="button" onclick={() => load(query, activeTag)}>Retry</button>
+				<button type="button" onclick={() => load(query, activeTags)}>Retry</button>
 			</div>
 		{:else if !loading && places.length === 0}
 			<div class="notice">
