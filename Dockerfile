@@ -21,7 +21,7 @@ RUN cd api && go mod download
 
 COPY api/ ./api/
 RUN rm -rf api/webdist && mkdir -p api/webdist && cp -r web/build/. api/webdist/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /places ./api/
+RUN cd api && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /places .
 
 # :nonroot runs as UID/GID 65532 — paired with the pod securityContext in
 # deployment.yaml.
