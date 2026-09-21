@@ -143,6 +143,15 @@
 			const ann = annotate?.(p);
 			L.marker([p.lat, p.lng], { icon: pinIcon(p.visited, ann?.color), title: p.name })
 				.bindPopup(popupHtml(p, ann))
+				.on('popupopen', (ev: { popup: { getElement(): HTMLElement | null } }) => {
+					const el = ev.popup.getElement()?.querySelector('[data-place-id]');
+					if (!el) return;
+					el.addEventListener('click', (e) => {
+						e.preventDefault();
+						const id = (el as HTMLElement).getAttribute('data-place-id');
+						if (id) onPlaceClick?.(id);
+					}, { once: true });
+				})
 				.addTo(markerLayer);
 			points.push([p.lat, p.lng]);
 		}
@@ -157,16 +166,6 @@
 		let disposed = false;
 		let viewportTimer: ReturnType<typeof setTimeout> | null = null;
 		let onMoveEnd: (() => void) | null = null;
-
-		// Popups are raw HTML outside Svelte, so title clicks are delegated from
-		// the map container back to the onPlaceClick prop.
-		const handlePopupClick = (e: MouseEvent) => {
-			const a = (e.target as HTMLElement).closest('[data-place-id]');
-			if (!a) return;
-			e.preventDefault();
-			const id = a.getAttribute('data-place-id');
-			if (id) onPlaceClick?.(id);
-		};
 
 		(async () => {
 			try {
@@ -223,7 +222,6 @@
 
 				markerLayer = L.layerGroup().addTo(map);
 				renderMarkers(places);
-				container.addEventListener('click', handlePopupClick);
 			} catch (err) {
 				error = err instanceof Error ? err.message : 'failed to load the map';
 			}
@@ -231,7 +229,6 @@
 
 		return () => {
 			disposed = true;
-			container.removeEventListener('click', handlePopupClick);
 			if (viewportTimer) clearTimeout(viewportTimer);
 			if (onMoveEnd) map?.off('moveend zoomend', onMoveEnd);
 			map?.remove();
