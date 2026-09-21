@@ -8,7 +8,7 @@ WEB_DIR  := web
 # build output is copied from web/build into api/webdist before `go build`.
 EMBED_DIR := $(API_DIR)/webdist
 
-.PHONY: help dev-api dev-web build build-web build-api docker clean test tidy check
+.PHONY: help dev-api dev-web build build-web build-api docker clean test tidy check sync
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
@@ -45,6 +45,9 @@ check: ## Vet the Go code and type-check the frontend
 
 tidy: ## Tidy Go module dependencies
 	cd $(API_DIR) && go mod tidy
+
+sync: ## Sync Obsidian wiki places into the local API (API must be running on :8080)
+	python3 scripts/wiki-sync.py
 
 clean: ## Remove build artifacts (leaves ./data alone)
 	rm -rf $(BINARY) $(WEB_DIR)/build $(WEB_DIR)/.svelte-kit
