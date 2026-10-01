@@ -16,3 +16,5 @@
 
 # Docker
 *.env.local
+/places
+__pycache__/

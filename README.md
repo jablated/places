@@ -82,6 +82,10 @@ A cron job (`places-wiki-sync`, Monday 10am ET) runs this automatically each wee
 
 **Matching:** existing places are identified by slug (derived from the wiki filename). New slugs create; existing slugs update.
 
+**Failure handling:** files with unparseable frontmatter are retried once with a sanitizer that double-quotes values starting with reserved YAML indicator chars (`@ & * ! % ` ` | >`, e.g. `instagram_handle: @foo`). If parsing still fails, the file is reported to stderr as `parse-failed:` and the run exits 1, so the weekly cron surfaces it. Files with junk prefixes (`skip-`, `unknown-`) are counted as junk-skipped.
+
+**Orphans:** after syncing, the script refetches all places and reports any API record whose slug matches no wiki file (`orphan: <slug> (<name>) [id=<id>]`) to stderr. Orphans are report-only — the script never deletes or modifies them.
+
 ## Testing
 
 ```bash

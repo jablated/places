@@ -4,14 +4,28 @@ Sync the Obsidian NYC places wiki into the places API.
 
 Reads every *.md file under --wiki-root/wiki/places/, parses the YAML
 frontmatter, and upserts each place into the API via POST (create) or
-PATCH (update). Existing records are matched by slug (derived from the
+PUT (update). Existing records are matched by slug (derived from the
 filename). The script fetches all existing places once at startup, so
 it makes one bulk read + one write per place — no N+1 queries.
+
+Files whose frontmatter fails to parse are retried once against a
+sanitized copy in which unquoted values starting with a reserved YAML
+indicator character (@ & * ! % ` | >) — e.g. `instagram_handle: @foo`
+— are double-quoted. If the retry also fails, the file is a parse
+failure: it is reported to stderr as `parse-failed:` and the run
+exits 1, so the weekly cron surfaces it. Only files with junk
+prefixes (`skip-`, `unknown-`) are counted as junk-skipped.
+
+After the upsert loop the script refetches all places from the API
+and reports any record whose slug matches no parsed wiki file
+("orphan") to stderr, with the count in the final summary. Orphans
+are report-only — the script never deletes or modifies them.
 
 Usage:
   python3 scripts/wiki-sync.py [--wiki-root DIR] [--api-url URL] [--dry-run]
 
-Exits 0 on success, 1 if any place failed (after processing all of them).
+Exits 0 on success, 1 if any wiki file failed to parse or any place
+failed to sync (after processing all of them).
 """
 
 from __future__ import annotations
@@ -39,27 +53,87 @@ NEAR_NYC_CITY = "New York Area"
 # Frontmatter keys that hold source URLs — either spelling is accepted.
 SOURCE_KEYS = ("source", "sources")
 
+
+class ParseFailure(Exception):
+    """A wiki file whose frontmatter failed to parse even after
+    sanitization. main() reports these loudly and exits 1."""
+
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.reason = message
+
+
 # ---------------------------------------------------------------------------
 # Parsing
 # ---------------------------------------------------------------------------
 
-def parse_wiki_file(path: Path) -> dict[str, Any] | None:
-    """Return a dict ready for the API, or None if the file should be skipped."""
+# Characters that cannot start an unquoted YAML scalar (reserved
+# indicators). A value beginning with one of these either fails to
+# parse outright (@ % ` * in flow/plain context) or changes meaning
+# (& * ! | > are anchors/aliases/tags/block scalars), so such values
+# are double-quoted during frontmatter sanitization.
+RESERVED_INDICATORS = ("@", "&", "*", "!", "%", "`", "|", ">")
+
+# Only sanitize simple `key: value` mappings — not nested block
+# sequences/mappings, and not keys (frontmatter keys are plain scalars
+# in practice).
+_UNQUOTED_SCALAR_RE = re.compile(
+    r"^(?P<key>[^:#\s][^:#]*):\s"
+    r"(?P<value>[^'\"].*?)"
+    r"(?P<comment>\s+#.*)?$"
+)
+
+
+def sanitize_frontmatter(fm_text: str) -> str:
+    """Double-quote plain scalar values that start with a reserved
+    YAML indicator character, e.g. `instagram_handle: @foo` ->
+    `instagram_handle: "@foo"`. Trailing comments are preserved and
+    internal quotes/backslashes are escaped. All other lines pass
+    through unchanged. The result must be re-validated by the caller
+    — this is a heuristic fix-up, not a general YAML rewriter.
+    """
+    out_lines: list[str] = []
+    for line in fm_text.splitlines():
+        m = _UNQUOTED_SCALAR_RE.match(line)
+        if m and m.group("value").startswith(RESERVED_INDICATORS):
+            value = m.group("value").replace("\\", "\\\\").replace('"', '\\"')
+            comment = m.group("comment") or ""
+            line = f'{m.group("key")}: "{value}"{comment}'
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+def parse_wiki_file(path: Path) -> dict[str, Any]:
+    """Return a dict ready for the API. Raises ParseFailure if the
+    file cannot become a place: YAML frontmatter that fails to parse
+    even after sanitization, no frontmatter at all, or no `name`.
+    """
     text = path.read_text(encoding="utf-8")
 
     # Extract YAML frontmatter between the first pair of --- fences.
     fm_match = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
     if not fm_match:
-        return None
+        raise ParseFailure(f"{path.name}: no YAML frontmatter found")
 
-    try:
-        fm = yaml.safe_load(fm_match.group(1)) or {}
-    except yaml.YAMLError:
-        return None
+    fm = None
+    last_err: yaml.YAMLError | None = None
+    for attempt in (fm_match.group(1), sanitize_frontmatter(fm_match.group(1))):
+        try:
+            fm = yaml.safe_load(attempt) or {}
+            break
+        except yaml.YAMLError as e:
+            last_err = e
+
+    if fm is None:
+        reason = " ".join(str(last_err).split()) if last_err else "unknown YAML error"
+        raise ParseFailure(
+            f"{path.name}: YAML frontmatter failed to parse even after "
+            f"sanitization: {reason}"
+        )
 
     name = (fm.get("name") or "").strip()
     if not name:
-        return None
+        raise ParseFailure(f"{path.name}: frontmatter has no 'name' field")
 
     # Body after the closing --- fence.
     body = text[fm_match.end():]
@@ -244,18 +318,24 @@ def main() -> int:
     # Collect and parse wiki files.
     files = sorted(places_dir.glob("*.md"))
     parsed: list[tuple[Path, dict]] = []
-    skipped = 0
+    junk_skipped = 0
+    parse_failures: list[ParseFailure] = []
     for f in files:
         if any(f.name.startswith(p) for p in JUNK_PREFIXES):
-            skipped += 1
+            junk_skipped += 1
             continue
-        place = parse_wiki_file(f)
-        if place is None:
-            skipped += 1
-            continue
-        parsed.append((f, place))
+        try:
+            parsed.append((f, parse_wiki_file(f)))
+        except ParseFailure as e:
+            parse_failures.append(e)
 
-    print(f"Parsed {len(parsed)} places ({skipped} skipped) from {places_dir}")
+    for e in parse_failures:
+        print(f"parse-failed: {e.reason}", file=sys.stderr)
+    print(
+        f"Parsed {len(parsed)} places "
+        f"({junk_skipped} junk-skipped, {len(parse_failures)} parse-failed) "
+        f"from {places_dir}"
+    )
 
     if args.dry_run:
         for _, p in parsed[:5]:
@@ -263,7 +343,7 @@ def main() -> int:
         if len(parsed) > 5:
             print(f"  … and {len(parsed) - 5} more")
         print("Dry run — nothing written.")
-        return 0
+        return 1 if parse_failures else 0
 
     # Fetch existing places once.
     print(f"Fetching existing places from {args.api_url} …")
@@ -294,8 +374,29 @@ def main() -> int:
             print(f"  error [{slug}]: {e}", file=sys.stderr)
             errors += 1
 
-    print(f"\nDone: {created} created, {updated} updated, {errors} errors.")
-    return 0 if errors == 0 else 1
+    # Orphan report — API records whose slug matches no parsed wiki
+    # file. Report-only; never deletes or modifies anything.
+    try:
+        current = fetch_all_places(args.api_url)
+    except requests.RequestException as e:
+        print(f"error: could not refetch places for orphan report: {e}", file=sys.stderr)
+        current = None
+
+    orphans = 0
+    if current is not None:
+        wiki_slugs = {payload["slug"] for _, payload in parsed}
+        for slug, place in sorted(current.items()):
+            if slug not in wiki_slugs:
+                orphans += 1
+                name = place.get("name", "")
+                place_id = place.get("id", "?")
+                print(f"orphan: {slug} ({name}) [id={place_id}]", file=sys.stderr)
+
+    print(
+        f"\nDone: {created} created, {updated} updated, {errors} errors, "
+        f"{orphans} orphans, {len(parse_failures)} parse-failed."
+    )
+    return 0 if errors == 0 and not parse_failures else 1
 
 
 if __name__ == "__main__":
